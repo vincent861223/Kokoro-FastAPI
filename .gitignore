@@ -38,6 +38,7 @@ ENV/
 
 *.pth
 *.tar*
+config.json
 
 
 # Other project files
