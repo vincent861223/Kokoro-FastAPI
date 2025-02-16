@@ -19,6 +19,12 @@ from .audio import AudioNormalizer, AudioService
 from .text_processing import tokenize
 from .text_processing.text_processor import process_text_chunk, smart_split
 from ..structures.schemas import NormalizationOptions
+import re
+
+DEFAULT_MULTI_SPEAKER_VOICES = {
+    'a': 'af_alloy',
+    'z': 'zm_yunxi'
+}
 
 class TTSService:
     """Text-to-speech service."""
@@ -44,14 +50,12 @@ class TTSService:
         self,
         chunk_text: str,
         tokens: List[int],
-        voice_name: str,
-        voice_path: str,
+        voices: dict[str, dict[str, str]], # List[voice_name, voice_path]
         speed: float,
         output_format: Optional[str] = None,
         is_first: bool = False,
         is_last: bool = False,
         normalizer: Optional[AudioNormalizer] = None,
-        lang_code: Optional[str] = None,
     ) -> AsyncGenerator[Union[np.ndarray, bytes], None]:
         """Process tokens into audio."""
         async with self._chunk_semaphore:
@@ -88,9 +92,8 @@ class TTSService:
                     # For Kokoro V1, pass text and voice info with lang_code
                     async for chunk_audio in self.model_manager.generate(
                         chunk_text,
-                        (voice_name, voice_path),
+                        voices,
                         speed=speed,
-                        lang_code=lang_code,
                     ):
                         # For streaming, convert to bytes
                         if output_format:
@@ -118,7 +121,7 @@ class TTSService:
                 else:
                     # For legacy backends, load voice tensor
                     voice_tensor = await self._voice_manager.load_voice(
-                        voice_name, device=backend.device
+                        voices[0]['voice_name'], device=backend.device
                     )
                     chunk_audio = await self.model_manager.generate(
                         tokens, voice_tensor, speed=speed
@@ -248,15 +251,35 @@ class TTSService:
             # Get backend
             backend = self.model_manager.get_backend()
 
-            # Get voice path, handling combined voices
-            voice_name, voice_path = await self._get_voice_path(voice)
-            logger.debug(f"Using voice path: {voice_path}")
-
             # Use provided lang_code or determine from voice name
-            pipeline_lang_code = lang_code if lang_code else voice[:1].lower()
-            logger.info(
-                f"Using lang_code '{pipeline_lang_code}' for voice '{voice_name}' in audio stream"
-            )
+            lang_code = lang_code if lang_code else voice[:1].lower()
+            voices_name_and_path = {} 
+            if (len(lang_code) > 1): 
+                # Multi-speaker
+                logger.info("Multi-speaker")
+                voice = re.sub(r'\(\d+\)', '', voice)
+                voices = voice.split('+')
+                voices = dict(map(lambda x: (x[0], x), voices))
+                # for voice in voices: 
+                #     logger.debug(f"voice: {voice}")
+                logger.debug(f"voices: {voices}")
+                for code in lang_code: 
+                    voice = voices.get(code, DEFAULT_MULTI_SPEAKER_VOICES[code]) 
+                    voice_name, voice_path = await self._get_voice_path(voice)
+                    logger.debug(f"Using voice path: {voice_path}")
+                    logger.info(
+                        f"Using lang_code '{code}' for voice '{voice_name}' in audio stream"
+                    )
+                    voices_name_and_path[code] = {'voice_name': voice_name, 'voice_path': voice_path}
+            else: 
+                # Get voice path, handling combined voices
+                voice_name, voice_path = await self._get_voice_path(voice)
+                logger.debug(f"Using voice path: {voice_path}")
+                logger.info(
+                    f"Using lang_code '{lang_code}' for voice '{voice_name}' in audio stream"
+                )
+                voices_name_and_path[lang_code] = {'voice_name': voice_name, 'voice_path': voice_path}
+
 
             # Process text in chunks with smart splitting
             async for chunk_text, tokens in smart_split(text,normalization_options=normalization_options):
@@ -265,14 +288,12 @@ class TTSService:
                     async for result in self._process_chunk(
                         chunk_text,  # Pass text for Kokoro V1
                         tokens,  # Pass tokens for legacy backends
-                        voice_name,  # Pass voice name
-                        voice_path,  # Pass voice path
+                        voices_name_and_path,
                         speed,
                         output_format,
                         is_first=(chunk_index == 0),
                         is_last=False,  # We'll update the last chunk later
                         normalizer=stream_normalizer,
-                        lang_code=pipeline_lang_code,  # Pass lang_code
                     ):
                         if result is not None:
                             yield result
@@ -295,14 +316,12 @@ class TTSService:
                     async for result in self._process_chunk(
                         "",  # Empty text
                         [],  # Empty tokens
-                        voice_name,
-                        voice_path,
+                        voices_name_and_path,
                         speed,
                         output_format,
                         is_first=False,
                         is_last=True,  # Signal this is the last chunk
                         normalizer=stream_normalizer,
-                        lang_code=pipeline_lang_code,  # Pass lang_code
                     ):
                         if result is not None:
                             yield result

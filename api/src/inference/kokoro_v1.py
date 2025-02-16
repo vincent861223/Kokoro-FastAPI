@@ -8,6 +8,8 @@ import torch
 from kokoro import KModel, KPipeline
 from loguru import logger
 
+import re
+
 from ..core import paths
 from ..core.config import settings
 from ..core.model_config import model_config
@@ -178,7 +180,7 @@ class KokoroV1(BaseModelBackend):
     async def generate(
         self,
         text: str,
-        voice: Union[str, Tuple[str, Union[torch.Tensor, str]]],
+        voices: dict[str, dict[str, str]],
         speed: float = 1.0,
         lang_code: Optional[str] = None,
     ) -> AsyncGenerator[np.ndarray, None]:
@@ -204,65 +206,80 @@ class KokoroV1(BaseModelBackend):
                 if self._check_memory():
                     self._clear_memory()
 
+            logger.debug(f"voices: {voices}")
+
+            for lang, voice in voices.items(): 
+                voice_name = voice['voice_name']
+                voice_path = voice['voice_path']
+                logger.debug(f"voice_name: {voice_name}")
+                logger.debug(f"voice_path: {voice_path}")
+
+                # Load voice tensor with proper device mapping
+                voice_tensor = await paths.load_voice_tensor(
+                    voice_path, device=self._device
+                )
+                # Save back to a temporary file with proper device mapping
+                import tempfile
+
+                temp_dir = tempfile.gettempdir()
+                temp_path = os.path.join(
+                    temp_dir, f"temp_voice_{os.path.basename(voice_path)}"
+                )
+                await paths.save_voice_tensor(voice_tensor, temp_path)
+                voice_path = temp_path
             # Handle voice input
-            voice_path: str
-            voice_name: str
-            if isinstance(voice, tuple):
-                voice_name, voice_data = voice
-                if isinstance(voice_data, str):
-                    voice_path = voice_data
-                else:
-                    # Save tensor to temporary file
-                    import tempfile
+            # if isinstance(voice, tuple):
+            #     voice_name, voice_data = voice
+            #     if isinstance(voice_data, str):
+            #         voice_path = voice_data
+            #     else:
+            #         # Save tensor to temporary file
+            #         import tempfile
 
-                    temp_dir = tempfile.gettempdir()
-                    voice_path = os.path.join(temp_dir, f"{voice_name}.pt")
-                    # Save tensor with CPU mapping for portability
-                    torch.save(voice_data.cpu(), voice_path)
-            else:
-                voice_path = voice
-                voice_name = os.path.splitext(os.path.basename(voice_path))[0]
+            #         temp_dir = tempfile.gettempdir()
+            #         voice_path = os.path.join(temp_dir, f"{voice_name}.pt")
+            #         # Save tensor with CPU mapping for portability
+            #         torch.save(voice_data.cpu(), voice_path)
+            # else:
+            #     voice_path = voice
+            #     voice_name = os.path.splitext(os.path.basename(voice_path))[0]
 
-            # Load voice tensor with proper device mapping
-            voice_tensor = await paths.load_voice_tensor(
-                voice_path, device=self._device
-            )
-            # Save back to a temporary file with proper device mapping
-            import tempfile
+            # pipeline_lang_code = lang_code if lang_code else (settings.default_voice_code if settings.default_voice_code else voice_name[0].lower())
 
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(
-                temp_dir, f"temp_voice_{os.path.basename(voice_path)}"
-            )
-            await paths.save_voice_tensor(voice_tensor, temp_path)
-            voice_path = temp_path
+            logger.debug(f"Split by lang: {self.separate_languages(text)}")
 
-            # Use provided lang_code, settings voice code override, or first letter of voice name
-            pipeline_lang_code = lang_code if lang_code else (settings.default_voice_code if settings.default_voice_code else voice_name[0].lower())
-            pipeline = self._get_pipeline(pipeline_lang_code)
+            audio = np.array([])
+            for chunk, lang in self.separate_languages(text): 
+                print(chunk)
+                print(lang)
+                # Use provided lang_code, settings voice code override, or first letter of voice name
+                pipeline = self._get_pipeline(lang)
 
-            logger.debug(
-                f"Generating audio for text with lang_code '{pipeline_lang_code}': '{text[:100]}{'...' if len(text) > 100 else ''}'"
-            )
-            for result in pipeline(
-                text, voice=voice_path, speed=speed, model=self._model
-            ):
-                if result.audio is not None:
-                    logger.debug(f"Got audio chunk with shape: {result.audio.shape}")
-                    yield result.audio.numpy()
-                else:
-                    logger.warning("No audio in chunk")
+                logger.debug(
+                    f"Generating audio for chunk with lang_code '{lang}': '{chunk[:100]}{'...' if len(chunk) > 100 else ''}'"
+                )
+                for result in pipeline(
+                    chunk, voice=voices[lang]['voice_path'], speed=speed, model=self._model
+                ):
+                    if result.audio is not None:
+                        audio = np.append(audio, result.audio.numpy())
+                        logger.debug(f"Got audio chunk with shape: {result.audio.shape}")
+                    else:
+                        logger.warning("No audio in chunk")
+            yield audio
+
+          
 
         except Exception as e:
             logger.error(f"Generation failed: {e}")
-            if (
-                self._device == "cuda"
-                and model_config.pytorch_gpu.retry_on_oom
-                and "out of memory" in str(e).lower()
-            ):
-                self._clear_memory()
-                async for chunk in self.generate(text, voice, speed, lang_code):
-                    yield chunk
+            # if (
+            #     self._device == "cuda"
+            #     and model_config.pytorch_gpu.retry_on_oom
+            #     and "out of memory" in str(e).lower()
+            # ):
+            #     self._clear_memory()
+            #     async for chunk in self.generate(text, voice, speed, lang_code):
+            #         yield chunk
             raise
 
     def _check_memory(self) -> bool:
@@ -299,3 +316,39 @@ class KokoroV1(BaseModelBackend):
     def device(self) -> str:
         """Get device model is running on."""
         return self._device
+
+    def separate_languages(self, text):
+        chinese_pattern = re.compile(r'[\u4e00-\u9fff]')  # Match Chinese characters
+        english_pattern = re.compile(r'[a-zA-Z]')         # Match English letters
+
+        chunks = []
+        current_chunk = ""
+        current_type = None  # Track current language type (Chinese, English, or Other)
+        current_chunk_type = None
+
+        for char in text:
+            if english_pattern.match(char):
+                char_type = "a"
+            elif chinese_pattern.match(char):
+                char_type = "z"
+            else:
+                char_type = "other"  # Punctuation, spaces, numbers, etc.
+
+            if current_type is None or char_type == current_type or char_type == "other":
+                # Append to current chunk if same type or "other" (punctuation, space, etc.)
+                current_chunk += char
+            else:
+                # Start a new chunk when switching between Chinese and English
+                chunks.append((current_chunk, current_type))
+                current_chunk = char  # Start new chunk
+
+            
+            if char_type == "a" or char_type == "z":
+                current_type = char_type  # Update current type
+        
+
+        # Append last collected chunk
+        if current_chunk:
+            chunks.append((current_chunk, current_type))
+
+        return chunks
