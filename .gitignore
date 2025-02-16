@@ -71,3 +71,4 @@ examples/speech.mp3
 examples/phoneme_examples/output/*.wav
 examples/assorted_checks/benchmarks/output_audio/*
 uv.lock
+log

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kokoro-fastapi.plist</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string><PWD-VARIABLE>/start-cpu.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string><HOME-VARIABLE>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string><PWD-VARIABLE></string>
+  <key>StandardOutPath</key>
+  <string><PWD-VARIABLE>/log/run.out</string>
+  <key>StandardErrorPath</key>
+  <string><PWD-VARIABLE>/log/run.err</string>
+</dict>
+</plist>
