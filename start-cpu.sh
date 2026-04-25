@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Get project root directory
-PROJECT_ROOT=$(pwd)
+# Get project root directory (set by launchd service or fallback to pwd)
+PROJECT_ROOT="${PROJECT_ROOT:-$(pwd)}"
+
+cd "$PROJECT_ROOT"
 
 # Set environment variables
 export USE_GPU=false

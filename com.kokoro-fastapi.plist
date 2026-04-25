@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.kokoro-fastapi.plist</string>
+  <string>com.kokoro-fastapi</string>
   <key>ProgramArguments</key>
   <array>
-    <string><PWD-VARIABLE>/start-cpu.sh</string>
+    <string><APP-SUPPORT-VARIABLE>/start-cpu.sh</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -16,9 +16,11 @@
   <dict>
     <key>PATH</key>
     <string><HOME-VARIABLE>/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PROJECT_ROOT</key>
+    <string><PWD-VARIABLE></string>
   </dict>
   <key>WorkingDirectory</key>
-  <string><PWD-VARIABLE></string>
+  <string><APP-SUPPORT-VARIABLE></string>
   <key>StandardOutPath</key>
   <string><PWD-VARIABLE>/log/run.out</string>
   <key>StandardErrorPath</key>
